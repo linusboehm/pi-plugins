@@ -4,6 +4,7 @@
   "description": "Personal extensions for the Pi coding agent",
   "type": "module",
   "private": true,
+  "license": "Apache-2.0",
   "keywords": [
     "pi-package"
   ],

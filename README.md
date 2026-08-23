@@ -26,6 +26,24 @@ Use either:
 
 or `Ctrl+.`.
 
+### `/btw`
+
+Opens a persistent side conversation without interrupting the main agent thread. The side chat receives the main conversation as context, can use coding tools, and can optionally summarize its findings back into the main chat.
+
+Open the side-chat overlay:
+
+```text
+/btw
+```
+
+Ask immediately:
+
+```text
+/btw How does this module work?
+```
+
+When closing a non-empty side chat, choose whether to keep it for later or inject a summary into the main conversation.
+
 ## Update
 
 ```bash

@@ -1,4 +1,11 @@
 /**
+ * Derived from Mitsupi's answer extension:
+ * https://github.com/mitsuhiko/agent-stuff
+ * Licensed under Apache-2.0. Modified to use current Pi package names,
+ * authenticated model-registry requests, and explicit extraction errors.
+ */
+
+/**
  * Q&A extraction hook - extracts questions from assistant responses
  *
  * Custom interactive TUI for answering questions.

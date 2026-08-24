@@ -36,6 +36,8 @@ import {
 interface ExtractedQuestion {
 	question: string;
 	context?: string;
+	recommendation?: string;
+	options?: string[];
 }
 
 interface ExtractionResult {
@@ -58,7 +60,9 @@ Output a JSON object with this structure:
   "questions": [
     {
       "question": "The question text",
-      "context": "Optional context that helps answer the question"
+      "context": "Optional context that helps answer the question",
+      "recommendation": "Optional recommendation explicitly given in the source text",
+      "options": ["a) First option", "b) Second option"]
     }
   ]
 }
@@ -68,6 +72,10 @@ Rules:
 - Keep questions in the order they appeared
 - Be concise with question text
 - Include context only when it provides essential information for answering
+- Include recommendation only when the source text explicitly recommends an answer or approach; never invent one
+- When a question has multiple-choice options, include every option and preserve its original marker and wording exactly
+- Recognize lettered and numbered options such as "a)", "B.", "1.", and "2)"
+- Omit options for open-ended questions
 - If no questions are found, return {"questions": []}
 
 Example output:
@@ -75,7 +83,9 @@ Example output:
   "questions": [
     {
       "question": "What is your preferred database?",
-      "context": "We can only configure MySQL and PostgreSQL because of what is implemented."
+      "context": "We can only configure MySQL and PostgreSQL because of what is implemented.",
+      "recommendation": "PostgreSQL is recommended because the deployment already supports it.",
+      "options": ["a) MySQL", "b) PostgreSQL"]
     },
     {
       "question": "Should we use TypeScript or JavaScript?"
@@ -124,9 +134,36 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 			jsonStr = jsonMatch[1].trim();
 		}
 
-		const parsed = JSON.parse(jsonStr);
+		const parsed = JSON.parse(jsonStr) as { questions?: unknown };
 		if (parsed && Array.isArray(parsed.questions)) {
-			return parsed as ExtractionResult;
+			const questions: ExtractedQuestion[] = [];
+			for (const value of parsed.questions) {
+				if (!value || typeof value !== "object") return null;
+				const item = value as Record<string, unknown>;
+				if (typeof item.question !== "string" || !item.question.trim()) return null;
+				if (item.context !== undefined && typeof item.context !== "string") return null;
+				if (item.recommendation !== undefined && typeof item.recommendation !== "string") return null;
+				if (
+					item.options !== undefined &&
+					(!Array.isArray(item.options) || item.options.some((option) => typeof option !== "string"))
+				) {
+					return null;
+				}
+
+				questions.push({
+					question: item.question.trim(),
+					...(typeof item.context === "string" && item.context.trim()
+						? { context: item.context.trim() }
+						: {}),
+					...(typeof item.recommendation === "string" && item.recommendation.trim()
+						? { recommendation: item.recommendation.trim() }
+						: {}),
+					...(Array.isArray(item.options)
+						? { options: item.options.map((option) => option.trim()).filter(Boolean) }
+						: {}),
+				});
+			}
+			return { questions };
 		}
 		return null;
 	} catch {
@@ -216,6 +253,12 @@ class QnAComponent implements Component {
 			parts.push(`Q: ${q.question}`);
 			if (q.context) {
 				parts.push(`> ${q.context}`);
+			}
+			if (q.recommendation) {
+				parts.push(`Recommendation: ${q.recommendation}`);
+			}
+			if (q.options?.length) {
+				parts.push("Options:", ...q.options.map((option) => `- ${option}`));
 			}
 			parts.push(`A: ${a}`);
 			parts.push("");
@@ -376,6 +419,28 @@ class QnAComponent implements Component {
 			const wrappedContext = wrapTextWithAnsi(contextText, contentWidth - 2);
 			for (const line of wrappedContext) {
 				lines.push(padToWidth(boxLine(line)));
+			}
+		}
+
+		// Recommendation if present
+		if (q.recommendation) {
+			lines.push(padToWidth(emptyBoxLine()));
+			const recommendationText = `${this.yellow("Recommended:")} ${q.recommendation}`;
+			const wrappedRecommendation = wrapTextWithAnsi(recommendationText, contentWidth);
+			for (const line of wrappedRecommendation) {
+				lines.push(padToWidth(boxLine(line)));
+			}
+		}
+
+		// Multiple-choice options if present, preserving their original labels
+		if (q.options?.length) {
+			lines.push(padToWidth(emptyBoxLine()));
+			lines.push(padToWidth(boxLine(this.bold("Options:"))));
+			for (const option of q.options) {
+				const wrappedOption = wrapTextWithAnsi(option, contentWidth - 2);
+				for (const line of wrappedOption) {
+					lines.push(padToWidth(boxLine(line, 4)));
+				}
 			}
 		}
 

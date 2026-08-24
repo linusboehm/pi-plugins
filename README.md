@@ -14,7 +14,7 @@ Restart Pi after installation, or run `/reload` in an existing session.
 
 ### `/answer`
 
-Extracts questions from the latest assistant response and presents an interactive form for answering them one at a time.
+Extracts questions from the latest assistant response and presents an interactive form for answering them one at a time. Explicit recommendations and lettered or numbered multiple-choice options are preserved and displayed with the question.
 
 It prefers an authenticated Codex Mini model, then Claude Haiku, and otherwise uses the current model. Requests go through Pi's model registry so API keys, OAuth credentials, provider headers, and custom provider configuration are respected.
 

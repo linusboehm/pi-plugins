@@ -19,12 +19,13 @@
 
 import { type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	Editor,
 	type EditorTheme,
 	Key,
+	Markdown,
 	matchesKey,
 	truncateToWidth,
 	type TUI,
@@ -70,8 +71,9 @@ Output a JSON object with this structure:
 Rules:
 - Extract all questions that require user input
 - Keep questions in the order they appeared
-- Be concise with question text
-- Include context only when it provides essential information for answering
+- Preserve each question's original wording, Markdown, line breaks, and inline formatting exactly
+- Do not summarize, rephrase, or strip formatting from a question
+- Include context only when it provides essential information for answering, preserving its original formatting
 - Include recommendation only when the source text explicitly recommends an answer or approach; never invent one
 - When a question has multiple-choice options, include every option and preserve its original marker and wording exactly
 - Recognize lettered and numbered options such as "a)", "B.", "1.", and "2)"
@@ -177,6 +179,9 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 class QnAComponent implements Component {
 	private questions: ExtractedQuestion[];
 	private answers: string[];
+	private customDrafts: string[];
+	private selectedChoices: number[];
+	private focusModes: Array<"choices" | "editor">;
 	private currentIndex: number = 0;
 	private editor: Editor;
 	private tui: TUI;
@@ -202,6 +207,11 @@ class QnAComponent implements Component {
 	) {
 		this.questions = questions;
 		this.answers = questions.map(() => "");
+		this.customDrafts = questions.map(() => "");
+		this.selectedChoices = questions.map(() => 0);
+		this.focusModes = questions.map((question) =>
+			this.choiceLabels(question).length > 1 ? "choices" : "editor",
+		);
 		this.tui = tui;
 		this.onDone = onDone;
 
@@ -225,20 +235,60 @@ class QnAComponent implements Component {
 		};
 	}
 
-	private allQuestionsAnswered(): boolean {
-		this.saveCurrentAnswer();
-		return this.answers.every((a) => (a?.trim() || "").length > 0);
+	private choiceLabels(question: ExtractedQuestion): string[] {
+		const choices: string[] = [];
+		if (question.recommendation) choices.push("Agree with recommendation");
+		choices.push(...(question.options ?? []));
+		choices.push("Write a custom reply");
+		return choices;
+	}
+
+	private customChoiceIndex(question: ExtractedQuestion): number {
+		return this.choiceLabels(question).length - 1;
+	}
+
+	private selectedChoiceAnswer(question: ExtractedQuestion, index: number): string | undefined {
+		if (question.recommendation) {
+			if (index === 0) return `Agree with recommendation: ${question.recommendation}`;
+			return question.options?.[index - 1];
+		}
+		return question.options?.[index];
 	}
 
 	private saveCurrentAnswer(): void {
-		this.answers[this.currentIndex] = this.editor.getText();
+		if (this.focusModes[this.currentIndex] === "editor") {
+			this.customDrafts[this.currentIndex] = this.editor.getText();
+			this.answers[this.currentIndex] = this.customDrafts[this.currentIndex];
+		}
+	}
+
+	private chooseCurrentOption(): boolean {
+		const question = this.questions[this.currentIndex];
+		const selected = this.selectedChoices[this.currentIndex];
+		if (selected === this.customChoiceIndex(question)) {
+			this.focusModes[this.currentIndex] = "editor";
+			this.editor.setText(this.customDrafts[this.currentIndex] || "");
+			return false;
+		}
+
+		this.answers[this.currentIndex] = this.selectedChoiceAnswer(question, selected) ?? "";
+		return true;
+	}
+
+	private advance(): void {
+		this.saveCurrentAnswer();
+		if (this.currentIndex < this.questions.length - 1) {
+			this.navigateTo(this.currentIndex + 1);
+		} else {
+			this.showingConfirmation = true;
+		}
 	}
 
 	private navigateTo(index: number): void {
 		if (index < 0 || index >= this.questions.length) return;
 		this.saveCurrentAnswer();
 		this.currentIndex = index;
-		this.editor.setText(this.answers[index] || "");
+		this.editor.setText(this.customDrafts[index] || "");
 		this.invalidate();
 	}
 
@@ -277,7 +327,6 @@ class QnAComponent implements Component {
 	}
 
 	handleInput(data: string): void {
-		// Handle confirmation dialog
 		if (this.showingConfirmation) {
 			if (matchesKey(data, Key.enter) || data.toLowerCase() === "y") {
 				this.submit();
@@ -287,67 +336,81 @@ class QnAComponent implements Component {
 				this.showingConfirmation = false;
 				this.invalidate();
 				this.tui.requestRender();
-				return;
 			}
 			return;
 		}
 
-		// Global navigation and commands
-		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+		const question = this.questions[this.currentIndex];
+		const choices = this.choiceLabels(question);
+		const focus = this.focusModes[this.currentIndex];
+
+		if (matchesKey(data, Key.ctrl("c"))) {
 			this.cancel();
 			return;
 		}
 
-		// Tab / Shift+Tab for navigation
-		if (matchesKey(data, Key.tab)) {
-			if (this.currentIndex < this.questions.length - 1) {
-				this.navigateTo(this.currentIndex + 1);
+		if (matchesKey(data, Key.escape)) {
+			if (focus === "editor" && choices.length > 1) {
+				this.saveCurrentAnswer();
+				this.focusModes[this.currentIndex] = "choices";
+				this.selectedChoices[this.currentIndex] = this.customChoiceIndex(question);
+				this.invalidate();
 				this.tui.requestRender();
+			} else {
+				this.cancel();
 			}
+			return;
+		}
+
+		if (matchesKey(data, Key.tab)) {
+			if (focus === "choices") this.chooseCurrentOption();
+			this.advance();
+			this.invalidate();
+			this.tui.requestRender();
 			return;
 		}
 		if (matchesKey(data, Key.shift("tab"))) {
-			if (this.currentIndex > 0) {
-				this.navigateTo(this.currentIndex - 1);
+			if (this.currentIndex > 0) this.navigateTo(this.currentIndex - 1);
+			this.tui.requestRender();
+			return;
+		}
+
+		if (focus === "choices") {
+			if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+				const direction = matchesKey(data, Key.up) ? -1 : 1;
+				const current = this.selectedChoices[this.currentIndex];
+				this.selectedChoices[this.currentIndex] = (current + direction + choices.length) % choices.length;
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+
+			if (matchesKey(data, Key.enter)) {
+				if (this.chooseCurrentOption()) this.advance();
+				this.invalidate();
+				this.tui.requestRender();
+				return;
+			}
+
+			// Printable input immediately selects the custom reply and starts editing.
+			if (!data.startsWith("\x1b") && data >= " ") {
+				this.selectedChoices[this.currentIndex] = this.customChoiceIndex(question);
+				this.focusModes[this.currentIndex] = "editor";
+				this.editor.setText(this.customDrafts[this.currentIndex] || "");
+				this.editor.handleInput(data);
+				this.invalidate();
 				this.tui.requestRender();
 			}
 			return;
 		}
 
-		// Arrow up/down for question navigation when editor is empty
-		// (Editor handles its own cursor navigation when there's content)
-		if (matchesKey(data, Key.up) && this.editor.getText() === "") {
-			if (this.currentIndex > 0) {
-				this.navigateTo(this.currentIndex - 1);
-				this.tui.requestRender();
-				return;
-			}
-		}
-		if (matchesKey(data, Key.down) && this.editor.getText() === "") {
-			if (this.currentIndex < this.questions.length - 1) {
-				this.navigateTo(this.currentIndex + 1);
-				this.tui.requestRender();
-				return;
-			}
-		}
-
-		// Handle Enter ourselves (editor's submit is disabled)
-		// Plain Enter moves to next question or shows confirmation on last question
-		// Shift+Enter adds a newline (handled by editor)
 		if (matchesKey(data, Key.enter) && !matchesKey(data, Key.shift("enter"))) {
-			this.saveCurrentAnswer();
-			if (this.currentIndex < this.questions.length - 1) {
-				this.navigateTo(this.currentIndex + 1);
-			} else {
-				// On last question - show confirmation
-				this.showingConfirmation = true;
-			}
+			this.advance();
 			this.invalidate();
 			this.tui.requestRender();
 			return;
 		}
 
-		// Pass to editor
 		this.editor.handleInput(data);
 		this.invalidate();
 		this.tui.requestRender();
@@ -404,13 +467,11 @@ class QnAComponent implements Component {
 		lines.push(padToWidth(boxLine(progressParts.join(" "))));
 		lines.push(padToWidth(emptyBoxLine()));
 
-		// Current question
+		// Render the extractor's verbatim question as Markdown.
 		const q = this.questions[this.currentIndex];
-		const questionText = `${this.bold("Q:")} ${q.question}`;
-		const wrappedQuestion = wrapTextWithAnsi(questionText, contentWidth);
-		for (const line of wrappedQuestion) {
-			lines.push(padToWidth(boxLine(line)));
-		}
+		lines.push(padToWidth(boxLine(this.bold("Q:"))));
+		const renderedQuestion = new Markdown(q.question, 0, 0, getMarkdownTheme()).render(contentWidth - 2);
+		for (const line of renderedQuestion) lines.push(padToWidth(boxLine(line, 4)));
 
 		// Context if present
 		if (q.context) {
@@ -432,15 +493,16 @@ class QnAComponent implements Component {
 			}
 		}
 
-		// Multiple-choice options if present, preserving their original labels
-		if (q.options?.length) {
+		const choices = this.choiceLabels(q);
+		if (choices.length > 1) {
 			lines.push(padToWidth(emptyBoxLine()));
-			lines.push(padToWidth(boxLine(this.bold("Options:"))));
-			for (const option of q.options) {
-				const wrappedOption = wrapTextWithAnsi(option, contentWidth - 2);
-				for (const line of wrappedOption) {
-					lines.push(padToWidth(boxLine(line, 4)));
-				}
+			lines.push(padToWidth(boxLine(this.bold("Choose an answer:"))));
+			for (let index = 0; index < choices.length; index++) {
+				const selected = this.focusModes[this.currentIndex] === "choices" && this.selectedChoices[this.currentIndex] === index;
+				const marker = selected ? this.cyan("❯") : " ";
+				const label = index === 0 && q.recommendation ? this.yellow(choices[index]) : choices[index];
+				const wrappedChoice = wrapTextWithAnsi(`${marker} ${label}`, contentWidth - 2);
+				for (const line of wrappedChoice) lines.push(padToWidth(boxLine(line, 4)));
 			}
 		}
 
@@ -448,7 +510,8 @@ class QnAComponent implements Component {
 
 		// Render the editor component (multi-line input) with padding
 		// Skip the first and last lines (editor's own border lines)
-		const answerPrefix = this.bold("A: ");
+		const editing = this.focusModes[this.currentIndex] === "editor";
+		const answerPrefix = editing ? this.bold(this.cyan("A: ")) : this.bold("A: ");
 		const editorWidth = contentWidth - 4 - 3; // Extra padding + space for "A: "
 		const editorLines = this.editor.render(editorWidth);
 		for (let i = 1; i < editorLines.length - 1; i++) {
@@ -470,7 +533,9 @@ class QnAComponent implements Component {
 			lines.push(padToWidth(boxLine(truncateToWidth(confirmMsg, contentWidth))));
 		} else {
 			lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
-			const controls = `${this.dim("Tab/Enter")} next · ${this.dim("Shift+Tab")} prev · ${this.dim("Shift+Enter")} newline · ${this.dim("Esc")} cancel`;
+			const controls = this.focusModes[this.currentIndex] === "choices"
+				? `${this.dim("↑/↓")} choose · ${this.dim("Enter")} select · ${this.dim("type")} custom reply · ${this.dim("Tab")} next · ${this.dim("Esc")} cancel`
+				: `${this.dim("Enter/Tab")} next · ${this.dim("Shift+Enter")} newline · ${this.dim("Esc")} choices · ${this.dim("Ctrl+C")} cancel`;
 			lines.push(padToWidth(boxLine(truncateToWidth(controls, contentWidth))));
 		}
 		lines.push(padToWidth(this.dim("╰" + horizontalLine(boxWidth - 2) + "╯")));

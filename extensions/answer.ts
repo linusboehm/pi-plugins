@@ -18,7 +18,7 @@
  */
 
 import { type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ModelRegistry, Theme } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
@@ -185,6 +185,7 @@ class QnAComponent implements Component {
 	private currentIndex: number = 0;
 	private editor: Editor;
 	private tui: TUI;
+	private theme: Theme;
 	private onDone: (result: string | null) => void;
 	private showingConfirmation: boolean = false;
 
@@ -192,17 +193,17 @@ class QnAComponent implements Component {
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
-	// Colors - using proper reset sequences
-	private dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
-	private bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
-	private cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
-	private green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-	private yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
-	private gray = (s: string) => `\x1b[90m${s}\x1b[0m`;
+	private dim = (s: string) => this.theme.fg("dim", s);
+	private bold = (s: string) => this.theme.bold(s);
+	private accent = (s: string) => this.theme.fg("accent", s);
+	private success = (s: string) => this.theme.fg("success", s);
+	private warning = (s: string) => this.theme.fg("warning", s);
+	private muted = (s: string) => this.theme.fg("muted", s);
 
 	constructor(
 		questions: ExtractedQuestion[],
 		tui: TUI,
+		theme: Theme,
 		onDone: (result: string | null) => void,
 	) {
 		this.questions = questions;
@@ -213,15 +214,15 @@ class QnAComponent implements Component {
 			this.choiceLabels(question).length > 1 ? "choices" : "editor",
 		);
 		this.tui = tui;
+		this.theme = theme;
 		this.onDone = onDone;
 
-		// Create a minimal theme for the editor
 		const editorTheme: EditorTheme = {
 			borderColor: this.dim,
 			selectList: {
-				selectedBg: (s: string) => `\x1b[44m${s}\x1b[0m`,
-				matchHighlight: this.cyan,
-				itemSecondary: this.gray,
+				selectedBg: (s: string) => this.theme.bg("selectedBg", this.theme.fg("text", s)),
+				matchHighlight: this.accent,
+				itemSecondary: this.muted,
 			},
 		};
 
@@ -447,7 +448,7 @@ class QnAComponent implements Component {
 
 		// Title
 		lines.push(padToWidth(this.dim("╭" + horizontalLine(boxWidth - 2) + "╮")));
-		const title = `${this.bold(this.cyan("Questions"))} ${this.dim(`(${this.currentIndex + 1}/${this.questions.length})`)}`;
+		const title = `${this.bold(this.accent("Questions"))} ${this.dim(`(${this.currentIndex + 1}/${this.questions.length})`)}`;
 		lines.push(padToWidth(boxLine(title)));
 		lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
 
@@ -457,9 +458,9 @@ class QnAComponent implements Component {
 			const answered = (this.answers[i]?.trim() || "").length > 0;
 			const current = i === this.currentIndex;
 			if (current) {
-				progressParts.push(this.cyan("●"));
+				progressParts.push(this.accent("●"));
 			} else if (answered) {
-				progressParts.push(this.green("●"));
+				progressParts.push(this.success("●"));
 			} else {
 				progressParts.push(this.dim("○"));
 			}
@@ -476,7 +477,7 @@ class QnAComponent implements Component {
 		// Context if present
 		if (q.context) {
 			lines.push(padToWidth(emptyBoxLine()));
-			const contextText = this.gray(`> ${q.context}`);
+			const contextText = this.muted(`> ${q.context}`);
 			const wrappedContext = wrapTextWithAnsi(contextText, contentWidth - 2);
 			for (const line of wrappedContext) {
 				lines.push(padToWidth(boxLine(line)));
@@ -486,7 +487,7 @@ class QnAComponent implements Component {
 		// Recommendation if present
 		if (q.recommendation) {
 			lines.push(padToWidth(emptyBoxLine()));
-			const recommendationText = `${this.yellow("Recommended:")} ${q.recommendation}`;
+			const recommendationText = `${this.warning("Recommended:")} ${q.recommendation}`;
 			const wrappedRecommendation = wrapTextWithAnsi(recommendationText, contentWidth);
 			for (const line of wrappedRecommendation) {
 				lines.push(padToWidth(boxLine(line)));
@@ -499,8 +500,8 @@ class QnAComponent implements Component {
 			lines.push(padToWidth(boxLine(this.bold("Choose an answer:"))));
 			for (let index = 0; index < choices.length; index++) {
 				const selected = this.focusModes[this.currentIndex] === "choices" && this.selectedChoices[this.currentIndex] === index;
-				const marker = selected ? this.cyan("❯") : " ";
-				const label = index === 0 && q.recommendation ? this.yellow(choices[index]) : choices[index];
+				const marker = selected ? this.accent("❯") : " ";
+				const label = index === 0 && q.recommendation ? this.warning(choices[index]) : choices[index];
 				const wrappedChoice = wrapTextWithAnsi(`${marker} ${label}`, contentWidth - 2);
 				for (const line of wrappedChoice) lines.push(padToWidth(boxLine(line, 4)));
 			}
@@ -511,7 +512,7 @@ class QnAComponent implements Component {
 		// Render the editor component (multi-line input) with padding
 		// Skip the first and last lines (editor's own border lines)
 		const editing = this.focusModes[this.currentIndex] === "editor";
-		const answerPrefix = editing ? this.bold(this.cyan("A: ")) : this.bold("A: ");
+		const answerPrefix = editing ? this.bold(this.accent("A: ")) : this.bold("A: ");
 		const editorWidth = contentWidth - 4 - 3; // Extra padding + space for "A: "
 		const editorLines = this.editor.render(editorWidth);
 		for (let i = 1; i < editorLines.length - 1; i++) {
@@ -529,7 +530,7 @@ class QnAComponent implements Component {
 		// Confirmation dialog or footer with controls
 		if (this.showingConfirmation) {
 			lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
-			const confirmMsg = `${this.yellow("Submit all answers?")} ${this.dim("(Enter/y to confirm, Esc/n to cancel)")}`;
+			const confirmMsg = `${this.warning("Submit all answers?")} ${this.dim("(Enter/y to confirm, Esc/n to cancel)")}`;
 			lines.push(padToWidth(boxLine(truncateToWidth(confirmMsg, contentWidth))));
 		} else {
 			lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
@@ -651,8 +652,8 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Show the Q&A component
-			const answersResult = await ctx.ui.custom<string | null>((tui, _theme, _kb, done) => {
-				return new QnAComponent(extractionResult.questions, tui, done);
+			const answersResult = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+				return new QnAComponent(extractionResult.questions, tui, theme, done);
 			});
 
 			if (answersResult === null) {

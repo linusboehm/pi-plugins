@@ -258,7 +258,9 @@ class QnAComponent implements Component {
 
 	private saveCurrentAnswer(): void {
 		if (this.focusModes[this.currentIndex] === "editor") {
-			this.customDrafts[this.currentIndex] = this.editor.getText();
+			// Large pastes are collapsed to markers for display. Capture the expanded
+			// value before setText() clears the editor's paste metadata on navigation.
+			this.customDrafts[this.currentIndex] = this.editor.getExpandedText();
 			this.answers[this.currentIndex] = this.customDrafts[this.currentIndex];
 		}
 	}

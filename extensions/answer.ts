@@ -296,26 +296,24 @@ class QnAComponent implements Component {
 	private submit(): void {
 		this.saveCurrentAnswer();
 
-		// Build the response text
-		const parts: string[] = [];
-		for (let i = 0; i < this.questions.length; i++) {
-			const q = this.questions[i];
-			const a = this.answers[i]?.trim() || "(no answer)";
-			parts.push(`Q: ${q.question}`);
-			if (q.context) {
-				parts.push(`> ${q.context}`);
-			}
-			if (q.recommendation) {
-				parts.push(`Recommendation: ${q.recommendation}`);
-			}
-			if (q.options?.length) {
-				parts.push("Options:", ...q.options.map((option) => `- ${option}`));
-			}
-			parts.push(`A: ${a}`);
-			parts.push("");
-		}
+		const parts = this.questions.map((question, index) => {
+			const answer = this.answers[index]?.trim();
+			if (!answer) return `Q${index + 1}: No answer.`;
 
-		this.onDone(parts.join("\n").trim());
+			if (this.focusModes[index] === "editor") {
+				return `Q${index + 1}: Custom response: ${answer}`;
+			}
+
+			const selected = this.selectedChoices[index];
+			if (question.recommendation && selected === 0) {
+				return `Q${index + 1}: Agree with recommendation.`;
+			}
+
+			const optionIndex = selected - (question.recommendation ? 1 : 0) + 1;
+			return `Q${index + 1}: Selected option ${optionIndex}.`;
+		});
+
+		this.onDone(parts.join("\n"));
 	}
 
 	private cancel(): void {
